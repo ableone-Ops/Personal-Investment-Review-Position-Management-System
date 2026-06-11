@@ -1,0 +1,26 @@
+{
+  "name": "fupan-sys",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "node --experimental-sqlite server/index.js",
+    "dev:web": "vite --host 127.0.0.1",
+    "py:install": "\"C:\\Users\\Huzhiwei\\AppData\\Local\\Programs\\Python\\Python314\\python.exe\" -m pip install -r requirements.txt",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "start": "node --experimental-sqlite server/index.js"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.0.0",
+    "antd": "^5.27.0",
+    "concurrently": "^9.2.0",
+    "vite": "^7.0.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "lucide-react": "^0.468.0",
+    "dayjs": "^1.11.13"
+  },
+  "devDependencies": {}
+}

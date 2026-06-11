@@ -1,0 +1,159 @@
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #f5f7fb;
+  color: #1f2937;
+  font-family: Inter, "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+}
+
+.app-shell {
+  min-height: 100%;
+}
+
+.side {
+  background: #111827 !important;
+  color: #fff;
+  padding: 18px 14px;
+}
+
+.brand {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0;
+  padding: 0 8px;
+}
+
+.nav-list {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.nav-item {
+  width: 100%;
+  height: 42px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #cbd5e1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.nav-item:hover,
+.nav-item.active {
+  background: #1f2937;
+  color: #fff;
+}
+
+.topbar {
+  height: 76px;
+  padding: 0 24px;
+  background: #fff;
+  border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  line-height: 1.25;
+}
+
+.topbar h3 {
+  margin: 0 0 4px;
+}
+
+.content {
+  padding: 20px 24px 32px;
+  overflow: auto;
+}
+
+.full {
+  width: 100%;
+}
+
+.metric-card,
+.section-card {
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+}
+
+.metric-card .ant-card-body {
+  min-height: 104px;
+}
+
+.section-card .ant-card-head-title {
+  font-weight: 700;
+}
+
+.risk-line {
+  margin-top: 14px;
+  font-size: 22px;
+}
+
+.gain .ant-statistic-content,
+.gain {
+  color: #15803d;
+}
+
+.loss .ant-statistic-content,
+.loss {
+  color: #d4380d;
+}
+
+.market-row,
+.spread {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mini-list {
+  margin-top: 10px;
+}
+
+@media (max-width: 860px) {
+  .app-shell {
+    flex-direction: column;
+  }
+
+  .side {
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    flex: none !important;
+  }
+
+  .nav-list {
+    flex-direction: row;
+    overflow-x: auto;
+  }
+
+  .nav-item {
+    min-width: 118px;
+  }
+
+  .topbar {
+    height: auto;
+    padding: 14px 16px;
+    align-items: flex-start;
+    gap: 12px;
+    flex-direction: column;
+  }
+
+  .content {
+    padding: 14px;
+  }
+}
