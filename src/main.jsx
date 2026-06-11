@@ -50,7 +50,7 @@ async function api(path, options = {}) {
   return response.json();
 }
 
-const riskColor = { 正常: 'green', 观察: 'gold', 防守: 'orange', 危险: 'red', 待记录: 'default' };
+const riskColor = { 正常: 'green', 观察: 'gold', 防守: 'orange', 危险: 'red', 待记录: 'default', 历史不足: 'default' };
 const sourceLabel = { tdx_local: '通达信本地', akshare: 'akshare', manual: '手动' };
 const alertType = { danger: 'error', warning: 'warning', success: 'success', info: 'info' };
 
@@ -245,6 +245,24 @@ function Dashboard({ data, indexes, marketLoading, onUpdateMarket }) {
 }
 
 function PositionMiniTable({ positions }) {
+  const trendTagColor = (value) => {
+    if (value === '强势多头') return 'green';
+    if (value === '跌破多空线') return 'red';
+    if (value === '接近多空线') return 'orange';
+    if (value === '趋势未破但短线转弱') return 'gold';
+    return 'default';
+  };
+  const alertTags = (record) => {
+    const tags = [];
+    if ((record.trendAlerts || []).some((item) => item.type === 'white_overheat')) tags.push({ label: '远超白线', color: 'volcano' });
+    if ((record.trendAlerts || []).some((item) => item.type === 'near_yellow')) tags.push({ label: '接近黄线', color: 'orange' });
+    if ((record.trendAlerts || []).some((item) => item.type === 'below_yellow')) tags.push({ label: '跌破黄线', color: 'red' });
+    if ((record.trendAlerts || []).some((item) => item.type === 'white_below_yellow')) tags.push({ label: '趋势转弱', color: 'gold' });
+    if (record.profitPct <= -8) tags.push({ label: '浮亏较大', color: 'red' });
+    if (record.positionRatio >= 20) tags.push({ label: '仓位偏高', color: 'volcano' });
+    if (tags.length === 0) tags.push({ label: '无', color: 'green' });
+    return tags.map((item) => <Tag key={item.label} color={item.color}>{item.label}</Tag>);
+  };
   return (
     <Card title="持仓仓位" className="section-card">
       <Table
@@ -252,14 +270,16 @@ function PositionMiniTable({ positions }) {
         size="small"
         pagination={false}
         dataSource={positions}
+        className="compact-table"
         columns={[
-          { title: '名称', dataIndex: 'name' },
-          { title: '当前价', dataIndex: 'currentPrice', align: 'right' },
-          { title: '来源', dataIndex: 'quoteSource', render: (v) => <Tag>{sourceLabel[v] || v || '-'}</Tag> },
-          { title: '日期', dataIndex: 'quoteDate', render: (v, r) => v ? <Tag color={r.quoteIsLatest ? 'green' : 'gold'}>{v}</Tag> : '-' },
-          { title: '涨跌幅', dataIndex: 'changePct', align: 'right', render: (v) => <span className={Number(v) >= 0 ? 'gain' : 'loss'}>{pct(v)}</span> },
-          { title: '浮盈亏', dataIndex: 'profit', align: 'right', render: (v) => <span className={v >= 0 ? 'gain' : 'loss'}>{money(v)}</span> },
-          { title: '仓位', dataIndex: 'positionRatio', align: 'right', render: (v) => <Progress percent={Number(v)} size="small" strokeColor={v > 20 ? '#d4380d' : '#1677ff'} /> },
+          { title: '股票名称', dataIndex: 'name', width: 110 },
+          { title: '当前价', dataIndex: 'currentPrice', align: 'right', width: 80 },
+          { title: '白线偏离', dataIndex: 'whiteDeviationPct', align: 'right', width: 90, render: (v) => <span className={Number(v) >= 0 ? 'gain' : 'loss'}>{pct(v)}</span> },
+          { title: '黄线偏离', dataIndex: 'yellowDeviationPct', align: 'right', width: 90, render: (v) => <span className={Number(v) >= 0 ? 'gain' : 'loss'}>{pct(v)}</span> },
+          { title: '浮盈亏比例', dataIndex: 'profitPct', align: 'right', width: 95, render: (v) => <span className={v >= 0 ? 'gain' : 'loss'}>{pct(v)}</span> },
+          { title: '仓位比例', dataIndex: 'positionRatio', align: 'right', width: 120, render: (v) => <Progress percent={Number(v)} size="small" strokeColor={v > 20 ? '#d4380d' : '#1677ff'} /> },
+          { title: '趋势状态', dataIndex: 'trendStatus', width: 140, render: (v) => v ? <Tag color={trendTagColor(v)}>{v}</Tag> : '-' },
+          { title: '风控提醒', width: 190, render: (_, record) => <Space size={[0, 4]} wrap>{alertTags(record)}</Space> },
         ]}
       />
     </Card>
@@ -304,7 +324,7 @@ function Positions({ data, onChange }) {
       <Table
         rowKey="id"
         dataSource={data?.positions || []}
-        scroll={{ x: 1700 }}
+        scroll={{ x: 2100 }}
         columns={[
           { title: '代码', dataIndex: 'code', fixed: 'left', width: 100 },
           { title: '名称', dataIndex: 'name', fixed: 'left', width: 110 },
@@ -314,6 +334,11 @@ function Positions({ data, onChange }) {
           { title: '成本价', dataIndex: 'costPrice', align: 'right', width: 90 },
           { title: '数量', dataIndex: 'quantity', align: 'right', width: 90 },
           { title: '当前价', dataIndex: 'currentPrice', align: 'right', width: 90 },
+          { title: '白线', dataIndex: 'whiteLine', align: 'right', width: 90, render: (v) => v ?? '-' },
+          { title: '黄线', dataIndex: 'yellowLine', align: 'right', width: 90, render: (v) => v ?? '-' },
+          { title: '白线偏离', dataIndex: 'whiteDeviationPct', align: 'right', width: 100, render: pct },
+          { title: '黄线偏离', dataIndex: 'yellowDeviationPct', align: 'right', width: 100, render: pct },
+          { title: '趋势状态', dataIndex: 'trendStatus', width: 150, render: (v) => v ? <Tag color={v === '强势多头' ? 'green' : v === '跌破多空线' ? 'red' : 'gold'}>{v}</Tag> : '-' },
           { title: '涨跌幅', dataIndex: 'changePct', align: 'right', width: 90, render: (v) => <span className={Number(v) >= 0 ? 'gain' : 'loss'}>{pct(v)}</span> },
           { title: '成交量', dataIndex: 'volume', align: 'right', width: 120, render: (v) => v === null || v === undefined ? '-' : money(v) },
           { title: '成交额', dataIndex: 'turnover', align: 'right', width: 120, render: (v) => v === null || v === undefined ? '-' : money(v) },
@@ -410,11 +435,19 @@ function SystemSettings({ data, onChange }) {
   };
   return (
     <Card title="行情数据源设置" className="section-card" extra={<Space><Button onClick={detect}>检测通达信数据目录</Button><Button type="primary" icon={<Save size={16} />} onClick={save}>保存设置</Button></Space>}>
-      <Form form={form} layout="vertical" initialValues={{ tdxPath: 'D:\\HTZQ', preferTdxLocal: true, fallbackAkshare: true }}>
+      <Form form={form} layout="vertical" initialValues={{ tdxPath: 'D:\\HTZQ', preferTdxLocal: true, fallbackAkshare: true, trendSettings: { whiteOverheatPct: 30, nearYellowPct: 3, enableWhiteBelowYellowAlert: true, enableTrendDisplay: true } }}>
         <Form.Item name="tdxPath" label="通达信安装目录" rules={[{ required: true }]}><Input /></Form.Item>
         <Row gutter={16}>
           <Col xs={24} md={12}><Form.Item name="preferTdxLocal" label="优先使用通达信本地行情" valuePropName="checked"><Switch checkedChildren="开启" unCheckedChildren="关闭" /></Form.Item></Col>
           <Col xs={24} md={12}><Form.Item name="fallbackAkshare" label="本地失败后使用 akshare 备用" valuePropName="checked"><Switch checkedChildren="开启" unCheckedChildren="关闭" /></Form.Item></Col>
+        </Row>
+        <Divider />
+        <Title level={5}>知行趋势线提醒</Title>
+        <Row gutter={16}>
+          <Col xs={24} md={6}><Form.Item name={['trendSettings', 'whiteOverheatPct']} label="白线超涨提醒阈值 %"><InputNumber min={0} className="full" /></Form.Item></Col>
+          <Col xs={24} md={6}><Form.Item name={['trendSettings', 'nearYellowPct']} label="接近黄线提醒阈值 %"><InputNumber min={0} className="full" /></Form.Item></Col>
+          <Col xs={24} md={6}><Form.Item name={['trendSettings', 'enableWhiteBelowYellowAlert']} label="白线跌破黄线提醒" valuePropName="checked"><Switch checkedChildren="开启" unCheckedChildren="关闭" /></Form.Item></Col>
+          <Col xs={24} md={6}><Form.Item name={['trendSettings', 'enableTrendDisplay']} label="启用趋势状态展示" valuePropName="checked"><Switch checkedChildren="开启" unCheckedChildren="关闭" /></Form.Item></Col>
         </Row>
       </Form>
       <Alert showIcon type="info" message="当前阶段优先完成持仓股日线读取；指数自动更新仍保留原 akshare 路径，后续可继续扩展通达信指数文件。" />
@@ -467,6 +500,9 @@ function Indexes({ data, onChange }) {
                   <Descriptions.Item label="60日均线">{item.ma60 || '-'}</Descriptions.Item>
                   <Descriptions.Item label="20日线以上">{item.aboveMa20 ? '是' : '否'}</Descriptions.Item>
                   <Descriptions.Item label="60日线以上">{item.aboveMa60 ? '是' : '否'}</Descriptions.Item>
+                  <Descriptions.Item label="历史记录">{item.debug?.historyCount ?? '-'}</Descriptions.Item>
+                  <Descriptions.Item label="MA20样本">{item.debug?.ma20Count ?? '-'}</Descriptions.Item>
+                  <Descriptions.Item label="MA60样本">{item.debug?.ma60Count ?? '-'}</Descriptions.Item>
                 </Descriptions>
               </Space>
             </Card>

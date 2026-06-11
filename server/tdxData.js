@@ -51,6 +51,22 @@ function readTdxRecord(buffer, offset) {
   };
 }
 
+export function readTdxDayRecords(filePath, limit = 120) {
+  if (!fs.existsSync(filePath)) throw new Error(`文件不存在：${filePath}`);
+  const buffer = fs.readFileSync(filePath);
+  if (buffer.length < DAY_RECORD_SIZE) throw new Error('文件内容不足 32 字节，无法解析日线');
+  if (buffer.length % DAY_RECORD_SIZE !== 0) throw new Error(`文件长度 ${buffer.length} 不是 32 字节记录的整数倍`);
+
+  const total = buffer.length / DAY_RECORD_SIZE;
+  const start = Math.max(0, total - limit);
+  const records = [];
+  for (let index = start; index < total; index += 1) {
+    const record = readTdxRecord(buffer, index * DAY_RECORD_SIZE);
+    if (record.tradeDate && record.close) records.push(record);
+  }
+  return records;
+}
+
 export function getMarketByCode(code) {
   const clean = normalizeCode(code);
   if (clean.startsWith('6') || clean.startsWith('688')) return 'sh';
@@ -69,14 +85,9 @@ export function getTdxDayFilePath(code, tdxPath) {
 
 export function readTdxDayFile(filePath) {
   if (!fs.existsSync(filePath)) throw new Error(`文件不存在：${filePath}`);
-  const buffer = fs.readFileSync(filePath);
-  if (buffer.length < DAY_RECORD_SIZE) throw new Error('文件内容不足 32 字节，无法解析日线');
-  if (buffer.length % DAY_RECORD_SIZE !== 0) throw new Error(`文件长度 ${buffer.length} 不是 32 字节记录的整数倍`);
-
-  const offset = buffer.length - DAY_RECORD_SIZE;
-  const latest = readTdxRecord(buffer, offset);
-  const previousOffset = buffer.length >= DAY_RECORD_SIZE * 2 ? buffer.length - DAY_RECORD_SIZE * 2 : null;
-  const previous = previousOffset === null ? null : readTdxRecord(buffer, previousOffset);
+  const records = readTdxDayRecords(filePath, 120);
+  const latest = records.at(-1);
+  const previous = records.length >= 2 ? records.at(-2) : null;
   const changePct = previous?.close > 0 ? Number((((latest.close - previous.close) / previous.close) * 100).toFixed(2)) : null;
 
   if (!latest.tradeDate || !latest.close) throw new Error('最新记录缺少有效日期或收盘价');
@@ -87,6 +98,7 @@ export function readTdxDayFile(filePath) {
     historyInsufficient: !previous,
     source: 'tdx_local',
     filePath,
+    historyRecords: records,
   };
 }
 
@@ -116,6 +128,7 @@ export function getTdxIndexQuote(index, tdxPath) {
     ...quote,
     isLatest: quote.tradeDate >= expectedDate,
     expectedDate,
+    historyRecords: readTdxDayRecords(filePath, 120),
   };
 }
 

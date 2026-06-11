@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { updateMarketData } from './marketData.js';
 import { detectTdxDataDirectory } from './tdxData.js';
+import { defaultTrendSettings } from './trendIndicators.js';
 
 const PORT = Number(process.env.PORT || 3100);
 const dataDir = path.resolve('data');
@@ -31,6 +32,7 @@ const defaultMarketSettings = {
   tdxPath: 'D:\\HTZQ',
   preferTdxLocal: true,
   fallbackAkshare: true,
+  trendSettings: defaultTrendSettings,
 };
 
 const defaultIndexes = [
@@ -101,6 +103,13 @@ ensureColumn('positions', 'quote_date', 'quote_date TEXT');
 ensureColumn('positions', 'quote_updated_at', 'quote_updated_at TEXT');
 ensureColumn('positions', 'quote_source', 'quote_source TEXT DEFAULT "manual"');
 ensureColumn('positions', 'quote_is_latest', 'quote_is_latest INTEGER DEFAULT 0');
+ensureColumn('positions', 'white_line', 'white_line REAL');
+ensureColumn('positions', 'yellow_line', 'yellow_line REAL');
+ensureColumn('positions', 'white_deviation_pct', 'white_deviation_pct REAL');
+ensureColumn('positions', 'yellow_deviation_pct', 'yellow_deviation_pct REAL');
+ensureColumn('positions', 'trend_status', 'trend_status TEXT');
+ensureColumn('positions', 'trend_history_count', 'trend_history_count INTEGER DEFAULT 0');
+ensureColumn('positions', 'trend_alerts', 'trend_alerts TEXT');
 ensureColumn('index_records', 'open_point', 'open_point REAL');
 ensureColumn('index_records', 'high_point', 'high_point REAL');
 ensureColumn('index_records', 'low_point', 'low_point REAL');
@@ -131,6 +140,11 @@ function setSetting(key, value) {
 
 if (!db.prepare('SELECT value FROM settings WHERE key = ?').get('rules')) setSetting('rules', defaultRules);
 if (!db.prepare('SELECT value FROM settings WHERE key = ?').get('marketSettings')) setSetting('marketSettings', defaultMarketSettings);
+
+function getMarketSettings() {
+  const stored = getSetting('marketSettings', defaultMarketSettings);
+  return { ...defaultMarketSettings, ...stored, trendSettings: { ...defaultTrendSettings, ...(stored.trendSettings || {}) } };
+}
 
 function today() {
   return new Date().toISOString().slice(0, 10);
@@ -165,6 +179,13 @@ function normalizePosition(row, totalEquity = 0) {
     quoteUpdatedAt: row.quote_updated_at || '',
     quoteSource: row.quote_source || 'manual',
     quoteIsLatest: Boolean(row.quote_is_latest),
+    whiteLine: row.white_line === null ? null : Number(row.white_line || 0),
+    yellowLine: row.yellow_line === null ? null : Number(row.yellow_line || 0),
+    whiteDeviationPct: row.white_deviation_pct === null ? null : Number(row.white_deviation_pct || 0),
+    yellowDeviationPct: row.yellow_deviation_pct === null ? null : Number(row.yellow_deviation_pct || 0),
+    trendStatus: row.trend_status || '',
+    trendHistoryCount: Number(row.trend_history_count || 0),
+    trendAlerts: jsonParse(row.trend_alerts, []),
     stopLossPrice: row.stop_loss_price,
     takeProfitPrice: row.take_profit_price,
     reduceBelowPrice: row.reduce_below_price,
@@ -183,6 +204,7 @@ function getPositions() {
 
 function computeSnapshot() {
   const rules = getSetting('rules', defaultRules);
+  const marketSettings = getMarketSettings();
   const rawPositions = getPositions();
   const holdingValue = rawPositions.reduce((sum, item) => sum + Number(item.current_price || 0) * Number(item.quantity || 0), 0);
   const cash = Number(rules.account.cash || 0);
@@ -198,7 +220,7 @@ function computeSnapshot() {
   const drawdown = historicalHighEquity > 0 ? ((historicalHighEquity - totalEquity) / historicalHighEquity) * 100 : 0;
   const yearReturn = yearStartEquity > 0 ? ((totalEquity - yearStartEquity) / yearStartEquity) * 100 : 0;
   const cashRatio = totalEquity > 0 ? (cash / totalEquity) * 100 : 0;
-  const alerts = evaluateAlerts({ rules, positions, totalEquity, cash, positionRatio, drawdown, yearReturn });
+  const alerts = evaluateAlerts({ rules, marketSettings, positions, totalEquity, cash, positionRatio, drawdown, yearReturn });
   return {
     account: {
       totalEquity: round(totalEquity),
@@ -213,12 +235,12 @@ function computeSnapshot() {
     },
     positions,
     rules,
-    marketSettings: getSetting('marketSettings', defaultMarketSettings),
+    marketSettings,
     alerts,
   };
 }
 
-function evaluateAlerts({ rules, positions, totalEquity, cash, positionRatio, drawdown, yearReturn }) {
+function evaluateAlerts({ rules, marketSettings, positions, totalEquity, cash, positionRatio, drawdown, yearReturn }) {
   const alerts = [];
   const account = rules.account;
   if (positionRatio > Number(account.maxPositionRatio || 100)) alerts.push({ level: 'danger', scope: '账户', message: `总仓位 ${round(positionRatio)}% 超过上限 ${account.maxPositionRatio}%` });
@@ -234,6 +256,12 @@ function evaluateAlerts({ rules, positions, totalEquity, cash, positionRatio, dr
     if (position.takeProfitPrice && position.currentPrice >= position.takeProfitPrice) alerts.push({ level: 'success', scope: position.name, message: `${position.name} 当前价达到止盈价 ${position.takeProfitPrice}` });
     if (position.reduceBelowPrice && position.currentPrice <= position.reduceBelowPrice) alerts.push({ level: 'warning', scope: position.name, message: `${position.name} 跌破 ${position.reduceBelowPrice}，建议减仓 ${position.reduceRatio || 0}%` });
     if (position.observeAbovePrice && position.currentPrice >= position.observeAbovePrice) alerts.push({ level: 'info', scope: position.name, message: `${position.name} 突破 ${position.observeAbovePrice}，进入观察` });
+    if (marketSettings?.trendSettings?.enableTrendDisplay !== false) {
+      (position.trendAlerts || []).forEach((trendAlert) => {
+        if (trendAlert.type === 'insufficient_history') return;
+        alerts.push({ level: trendAlert.level || 'info', scope: position.name, message: `${position.name}：${trendAlert.message}` });
+      });
+    }
   });
 
   const byIndustry = new Map();
@@ -276,20 +304,31 @@ function getIndexes() {
 
 function marketStates() {
   return defaultIndexes.map(([code, name]) => {
-    const rows = db.prepare('SELECT * FROM index_records WHERE index_code = ? ORDER BY trade_date DESC LIMIT 60').all(code).reverse();
-    if (rows.length === 0) return { indexCode: code, indexName: name, state: '待记录', closePoint: 0, ma20: 0, ma60: 0 };
+    const rows = db.prepare('SELECT * FROM index_records WHERE index_code = ? ORDER BY trade_date DESC LIMIT 120').all(code).reverse();
+    if (rows.length === 0) return { indexCode: code, indexName: name, state: '待记录', closePoint: 0, ma20: null, ma60: null, aboveMa20: false, aboveMa60: false, debug: { historyCount: 0, ma20Count: 0, ma60Count: 0, ma20: null, ma60: null } };
     const last = rows.at(-1);
     const ma20Rows = rows.slice(-20);
     const ma60Rows = rows.slice(-60);
-    const ma20 = ma20Rows.reduce((sum, row) => sum + Number(row.close_point || 0), 0) / ma20Rows.length;
-    const ma60 = ma60Rows.reduce((sum, row) => sum + Number(row.close_point || 0), 0) / ma60Rows.length;
+    const ma20 = rows.length >= 20 ? ma20Rows.reduce((sum, row) => sum + Number(row.close_point || 0), 0) / 20 : null;
+    const ma60 = rows.length >= 60 ? ma60Rows.reduce((sum, row) => sum + Number(row.close_point || 0), 0) / 60 : null;
     const closePoint = Number(last.close_point);
-    const aboveMa20 = rows.length < 20 || closePoint >= ma20;
-    const aboveMa60 = rows.length < 60 || closePoint >= ma60;
-    let state = '正常';
-    if (rows.length >= 60 && !aboveMa60) state = '防守';
-    else if (rows.length >= 20 && !aboveMa20) state = '观察';
-    return { indexCode: code, indexName: name, state, closePoint, ma20: round(ma20), ma60: round(ma60), aboveMa20, aboveMa60, tradeDate: last.trade_date };
+    const aboveMa20 = ma20 === null ? false : closePoint >= ma20;
+    const aboveMa60 = ma60 === null ? false : closePoint >= ma60;
+    let state = rows.length < 20 ? '历史不足' : '正常';
+    if (ma60 !== null && !aboveMa60) state = '防守';
+    else if (ma20 !== null && !aboveMa20) state = '观察';
+    return {
+      indexCode: code,
+      indexName: name,
+      state,
+      closePoint,
+      ma20: ma20 === null ? null : round(ma20),
+      ma60: ma60 === null ? null : round(ma60),
+      aboveMa20,
+      aboveMa60,
+      tradeDate: last.trade_date,
+      debug: { historyCount: rows.length, ma20Count: ma20Rows.length, ma60Count: ma60Rows.length, ma20: ma20 === null ? null : round(ma20), ma60: ma60 === null ? null : round(ma60) },
+    };
   });
 }
 
@@ -309,12 +348,24 @@ function buildReviewSnapshot(date = today()) {
       quoteDate: item.quoteDate,
       quoteSource: item.quoteSource,
       quoteIsLatest: item.quoteIsLatest,
+      whiteLine: item.whiteLine,
+      yellowLine: item.yellowLine,
+      whiteDeviationPct: item.whiteDeviationPct,
+      yellowDeviationPct: item.yellowDeviationPct,
+      trendStatus: item.trendStatus,
+      trendAlerts: item.trendAlerts,
       marketValue: item.marketValue,
       profit: item.profit,
       profitPct: item.profitPct,
       positionRatio: item.positionRatio,
     })),
     alerts: snapshot.alerts,
+    trendSummary: {
+      whiteOverheat: snapshot.positions.filter((item) => (item.trendAlerts || []).some((alert) => alert.type === 'white_overheat')).map((item) => item.name),
+      nearYellow: snapshot.positions.filter((item) => (item.trendAlerts || []).some((alert) => alert.type === 'near_yellow')).map((item) => item.name),
+      belowYellow: snapshot.positions.filter((item) => (item.trendAlerts || []).some((alert) => alert.type === 'below_yellow')).map((item) => item.name),
+      whiteBelowYellow: snapshot.positions.filter((item) => (item.trendAlerts || []).some((alert) => alert.type === 'white_below_yellow')).map((item) => item.name),
+    },
     indexes: indexRows.map((row) => ({
       indexCode: row.index_code,
       indexName: row.index_name,
@@ -350,7 +401,7 @@ function providerIndexCodeToDb(code) {
 async function runMarketUpdate() {
   const positions = getPositions();
   const codes = positions.map((item) => normalizeCode(item.code)).filter(Boolean);
-  const settings = getSetting('marketSettings', defaultMarketSettings);
+  const settings = getMarketSettings();
   const providerResult = await updateMarketData(codes, settings);
   const quoteTime = providerResult.updatedAt || new Date().toISOString();
 
@@ -368,11 +419,30 @@ async function runMarketUpdate() {
     }
     db.prepare(`
       UPDATE positions
-      SET current_price = ?, change_pct = ?, volume = ?, turnover = ?, quote_date = ?, quote_updated_at = ?, quote_source = ?, quote_is_latest = ?, updated_at = CURRENT_TIMESTAMP
+      SET current_price = ?, change_pct = ?, volume = ?, turnover = ?, quote_date = ?, quote_updated_at = ?, quote_source = ?, quote_is_latest = ?,
+          white_line = ?, yellow_line = ?, white_deviation_pct = ?, yellow_deviation_pct = ?, trend_status = ?, trend_history_count = ?, trend_alerts = ?,
+          updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(Number(quote.price), quote.changePct ?? null, quote.volume ?? null, quote.turnover ?? null, quote.tradeDate || providerResult.tradeDate || today(), quoteTime, quote.source || 'akshare', quote.isLatest ? 1 : 0, position.id);
+    `).run(
+      Number(quote.price),
+      quote.changePct ?? null,
+      quote.volume ?? null,
+      quote.turnover ?? null,
+      quote.tradeDate || providerResult.tradeDate || today(),
+      quoteTime,
+      quote.source || 'akshare',
+      quote.isLatest ? 1 : 0,
+      quote.trend?.whiteLine ?? null,
+      quote.trend?.yellowLine ?? null,
+      quote.trend?.whiteDeviationPct ?? null,
+      quote.trend?.yellowDeviationPct ?? null,
+      quote.trend?.trendStatus ?? null,
+      quote.trend?.historyCount ?? 0,
+      JSON.stringify(quote.trend?.trendAlerts || []),
+      position.id,
+    );
     stockSuccess += 1;
-    stockResults.push({ code, name: position.name, success: true, source: quote.source || 'akshare', tradeDate: quote.tradeDate || providerResult.tradeDate || today(), isLatest: Boolean(quote.isLatest), price: quote.price, changePct: quote.changePct, volume: quote.volume, turnover: quote.turnover });
+    stockResults.push({ code, name: position.name, success: true, source: quote.source || 'akshare', tradeDate: quote.tradeDate || providerResult.tradeDate || today(), isLatest: Boolean(quote.isLatest), price: quote.price, changePct: quote.changePct, volume: quote.volume, turnover: quote.turnover, trend: quote.trend });
   }
 
   let indexSuccess = 0;
@@ -385,6 +455,26 @@ async function runMarketUpdate() {
     }
     const dbCode = quote.indexCode || providerIndexCodeToDb(quote.code);
     const indexName = defaultIndexes.find(([code]) => code === dbCode)?.[1] || quote.name || dbCode;
+    const historyRecords = quote.historyRecords?.length ? quote.historyRecords : [quote];
+    historyRecords.forEach((record, recordIndex) => {
+      const previous = recordIndex > 0 ? historyRecords[recordIndex - 1] : null;
+      const recordChangePct = previous?.close > 0 ? Number((((record.close - previous.close) / previous.close) * 100).toFixed(2)) : (record.changePct ?? null);
+      db.prepare(`
+        INSERT INTO index_records (trade_date, index_code, index_name, open_point, high_point, low_point, close_point, change_pct, volume, turnover, quote_source, quote_updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(trade_date, index_code) DO UPDATE SET
+          index_name=excluded.index_name,
+          open_point=excluded.open_point,
+          high_point=excluded.high_point,
+          low_point=excluded.low_point,
+          close_point=excluded.close_point,
+          change_pct=excluded.change_pct,
+          volume=excluded.volume,
+          turnover=excluded.turnover,
+          quote_source=excluded.quote_source,
+          quote_updated_at=excluded.quote_updated_at
+      `).run(record.tradeDate || quote.tradeDate || providerResult.tradeDate || today(), dbCode, indexName, record.open ?? null, record.high ?? null, record.low ?? null, Number(record.close ?? record.price), recordChangePct ?? 0, record.volume ?? null, record.turnover ?? 0, quote.source || 'akshare', quoteTime);
+    });
     db.prepare(`
       INSERT INTO index_records (trade_date, index_code, index_name, open_point, high_point, low_point, close_point, change_pct, volume, turnover, quote_source, quote_updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -401,7 +491,7 @@ async function runMarketUpdate() {
         quote_updated_at=excluded.quote_updated_at
     `).run(quote.tradeDate || providerResult.tradeDate || today(), dbCode, indexName, quote.open ?? null, quote.high ?? null, quote.low ?? null, Number(quote.price), quote.changePct ?? 0, quote.volume ?? null, quote.turnover ?? 0, quote.source || 'akshare', quoteTime);
     indexSuccess += 1;
-    indexResults.push({ code: dbCode, indexCode: dbCode, name: indexName, success: true, source: quote.source || 'akshare', tradeDate: quote.tradeDate || providerResult.tradeDate || today(), isLatest: Boolean(quote.isLatest), closePoint: quote.price, changePct: quote.changePct, volume: quote.volume, turnover: quote.turnover });
+    indexResults.push({ code: dbCode, indexCode: dbCode, name: indexName, success: true, source: quote.source || 'akshare', tradeDate: quote.tradeDate || providerResult.tradeDate || today(), isLatest: Boolean(quote.isLatest), closePoint: quote.price, changePct: quote.changePct, volume: quote.volume, turnover: quote.turnover, historyCount: historyRecords.length });
   }
 
   const snapshot = upsertReviewSnapshot(providerResult.tradeDate || today());
@@ -485,16 +575,17 @@ async function route(req, res) {
   if (req.method === 'OPTIONS') return send(res, 204, {});
   if (pathname === '/api/dashboard' && req.method === 'GET') return send(res, 200, computeSnapshot());
   if (pathname === '/api/market/update' && req.method === 'POST') return send(res, 200, await runMarketUpdate());
-  if (pathname === '/api/market/settings' && req.method === 'GET') return send(res, 200, getSetting('marketSettings', defaultMarketSettings));
+  if (pathname === '/api/market/settings' && req.method === 'GET') return send(res, 200, getMarketSettings());
   if (pathname === '/api/market/settings' && req.method === 'PUT') {
     const body = await readBody(req);
-    const next = { ...defaultMarketSettings, ...body };
+    const current = getMarketSettings();
+    const next = { ...defaultMarketSettings, ...current, ...body, trendSettings: { ...defaultTrendSettings, ...(current.trendSettings || {}), ...(body.trendSettings || {}) } };
     setSetting('marketSettings', next);
     return send(res, 200, next);
   }
   if (pathname === '/api/market/tdx-detect' && req.method === 'POST') {
     const body = await readBody(req);
-    return send(res, 200, detectTdxDataDirectory(body.tdxPath || getSetting('marketSettings', defaultMarketSettings).tdxPath));
+    return send(res, 200, detectTdxDataDirectory(body.tdxPath || getMarketSettings().tdxPath));
   }
   if (pathname === '/api/rules' && req.method === 'GET') return send(res, 200, getSetting('rules', defaultRules));
   if (pathname === '/api/rules' && req.method === 'PUT') {
@@ -560,8 +651,8 @@ async function route(req, res) {
   }
   if (pathname === '/api/export/positions' && req.method === 'GET') {
     const snapshot = computeSnapshot();
-    const header = ['代码', '名称', '市场', '行业', '类型', '成本价', '数量', '当前价', '涨跌幅', '成交量', '成交额', '行情日期', '数据来源', '是否最新', '更新时间', '市值', '浮盈亏', '收益率', '仓位'];
-    const rows = snapshot.positions.map((p) => [p.code, p.name, p.market, p.industry, p.holdingType, p.costPrice, p.quantity, p.currentPrice, `${p.changePct ?? ''}%`, p.volume ?? '', p.turnover ?? '', p.quoteDate, p.quoteSource, p.quoteIsLatest ? '是' : '否', p.quoteUpdatedAt, p.marketValue, p.profit, `${p.profitPct}%`, `${p.positionRatio}%`]);
+    const header = ['代码', '名称', '市场', '行业', '类型', '成本价', '数量', '当前价', '白线', '黄线', '白线偏离', '黄线偏离', '趋势状态', '涨跌幅', '成交量', '成交额', '行情日期', '数据来源', '是否最新', '更新时间', '市值', '浮盈亏', '收益率', '仓位'];
+    const rows = snapshot.positions.map((p) => [p.code, p.name, p.market, p.industry, p.holdingType, p.costPrice, p.quantity, p.currentPrice, p.whiteLine ?? '', p.yellowLine ?? '', `${p.whiteDeviationPct ?? ''}%`, `${p.yellowDeviationPct ?? ''}%`, p.trendStatus, `${p.changePct ?? ''}%`, p.volume ?? '', p.turnover ?? '', p.quoteDate, p.quoteSource, p.quoteIsLatest ? '是' : '否', p.quoteUpdatedAt, p.marketValue, p.profit, `${p.profitPct}%`, `${p.positionRatio}%`]);
     return sendCsv(res, 'positions.csv', [header, ...rows].map((row) => row.map(csvCell).join(',')).join('\n'));
   }
   if (pathname === '/api/export/reviews' && req.method === 'GET') {

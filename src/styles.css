@@ -124,6 +124,15 @@ body {
   margin-top: 10px;
 }
 
+.compact-table .ant-table-thead > tr > th,
+.compact-table .ant-table-tbody > tr > td {
+  padding: 8px 10px;
+}
+
+.compact-table .ant-progress-line {
+  margin-bottom: 0;
+}
+
 @media (max-width: 860px) {
   .app-shell {
     flex-direction: column;

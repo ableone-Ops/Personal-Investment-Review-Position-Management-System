@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TDX_INDEXES, updateIndicesFromTdx, updateQuotesFromTdx } from './tdxData.js';
+import { calculateZhixingTrend } from './trendIndicators.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const systemPython = 'C:\\Users\\Huzhiwei\\AppData\\Local\\Programs\\Python\\Python314\\python.exe';
@@ -99,7 +100,10 @@ export async function updateMarketData(codes, settings = {}) {
 
   if (useTdx) {
     const stockResult = updateQuotesFromTdx(pendingStocks, settings);
-    stocks.push(...stockResult.stocks);
+    stocks.push(...stockResult.stocks.map((stock) => ({
+      ...stock,
+      trend: calculateZhixingTrend((stock.historyRecords || []).map((record) => record.close), stock.price, settings.trendSettings || settings),
+    })));
     const stockSuccessCodes = new Set(stockResult.stocks.map((item) => normalizeCode(item.code)));
     pendingStocks = pendingStocks.filter((code) => !stockSuccessCodes.has(code));
     stockFailures.push(...stockResult.stockFailures.map((item) => ({ ...item, stage: 'primary' })));
